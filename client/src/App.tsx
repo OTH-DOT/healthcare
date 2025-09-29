@@ -1,9 +1,18 @@
 // App.tsx
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
-import { Button } from "@/components/ui/button";
-import ECGRealtime from "./pages/patient/ECGRealtime";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 import NotFound from "./pages/NotFound";
 
+// Layouts
+import PatientLayout from "./layouts/PatientLayout";
+import DoctorLayout from "./layouts/DoctorLayout";
+import AdminLayout from "./layouts/AdminLayout";
+
+// Example pages
+import ECGRealtime from "./pages/patient/ECGRealtime";
+import { Button } from "./components/ui/button";
+// import PatientDashboard from "./pages/patient/PatientDashboard";
+// import DoctorDashboard from "./pages/doctor/DoctorDashboard";
+// import AdminDashboard from "./pages/admin/AdminDashboard";
 
 function App() {
   return (
@@ -17,7 +26,31 @@ function App() {
             </div>
           }
         />
-        <Route path="/ecg-realtime" element={<ECGRealtime />} />
+        {/* Patient routes */}
+        <Route element={<PatientLayout />}>
+          {/* <Route path="/patient/dashboard" element={<PatientDashboard />} /> */}
+          <Route
+            path="/patient"
+            element={
+              <div className="flex min-h-screen flex-col items-center justify-center">
+                <h1 className="text-2xl mb-4">Patient</h1>
+              </div>
+            }
+          />
+        </Route>
+        <Route path="/patient/ecg" element={<ECGRealtime />} />
+
+        {/* Doctor routes */}
+        <Route element={<DoctorLayout />}>
+          {/* <Route path="/doctor/dashboard" element={<DoctorDashboard />} /> */}
+        </Route>
+
+        {/* Admin routes */}
+        <Route element={<AdminLayout />}>
+          {/* <Route path="/admin/dashboard" element={<AdminDashboard />} /> */}
+        </Route>
+
+        {/* Fallback */}
         <Route path="*" element={<NotFound />} />
       </Routes>
   );
