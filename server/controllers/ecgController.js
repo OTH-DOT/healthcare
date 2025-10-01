@@ -1,31 +1,53 @@
-import { io } from '../sockets/socket.js'; // import your socket instance
+// ecgController.js - CORRECTED VERSION
+import { broadcastECG } from "../sockets/socket.js";
 
-// Function to simulate ECG signal for 12 leads
-const generateECGData = () => {
-  const timestamp = Date.now();
-
-  // Simulate realistic ECG values for each lead (in mV)
-  const leads = {
-    I: +(Math.random() * 0.3 - 0.15).toFixed(2),
-    II: +(Math.random() * 0.3 - 0.15).toFixed(2),
-    III: +(Math.random() * 0.3 - 0.15).toFixed(2),
-    aVR: +(Math.random() * 0.3 - 0.15).toFixed(2),
-    aVL: +(Math.random() * 0.3 - 0.15).toFixed(2),
-    aVF: +(Math.random() * 0.3 - 0.15).toFixed(2),
-    V1: +(Math.random() * 0.3 - 0.15).toFixed(2),
-    V2: +(Math.random() * 0.3 - 0.15).toFixed(2),
-    V3: +(Math.random() * 0.3 - 0.15).toFixed(2),
-    V4: +(Math.random() * 0.3 - 0.15).toFixed(2),
-    V5: +(Math.random() * 0.3 - 0.15).toFixed(2),
-    V6: +(Math.random() * 0.3 - 0.15).toFixed(2),
-  };
-
-  return { timestamp, leads };
-};
+const LEAD_NAMES = ['I','II','III','aVR','aVL','aVF','V1','V2','V3','V4','V5','V6'];
 
 export const startECGSimulation = () => {
+  const BUFFER = [];
+  const FINAL_INTERVAL = 30 * 1000; // 30 seconds
+  const EMIT_INTERVAL = 250; // 4Hz
+
+  // Live data emitter
   setInterval(() => {
-    const data = generateECGData();
-    io.emit('ecgUpdate', data); // emit to all clients
-  }, 250); // every 250ms (4Hz)
+    const timestamp = Date.now();
+    const leads = {};
+    LEAD_NAMES.forEach(lead => {
+      leads[lead] = +(Math.random() * 0.3 - 0.15).toFixed(2);
+    });
+
+    const data = { timestamp, leads };
+    BUFFER.push(data);
+    
+    // Broadcast live ECG
+    broadcastECG(data);
+  }, EMIT_INTERVAL);
+
+  // Summary calculation emitter
+  setInterval(() => {
+    if (BUFFER.length === 0) return;
+
+    const summary = { timestamp: Date.now(), leads: {} };
+
+    LEAD_NAMES.forEach(lead => {
+      const values = BUFFER.map(d => d.leads[lead]);
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+      summary.leads[lead] = { 
+        min: +min.toFixed(3), 
+        max: +max.toFixed(3), 
+        avg: +avg.toFixed(3) 
+      };
+    });
+
+    // CRITICAL: Send summary with type identifier
+    broadcastECG({ type: 'summary', data: summary });
+    
+    console.log('Summary sent:', summary);
+
+    // Clear buffer
+    BUFFER.length = 0;
+  }, FINAL_INTERVAL);
 };

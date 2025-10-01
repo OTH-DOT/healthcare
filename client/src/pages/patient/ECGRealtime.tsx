@@ -1,14 +1,32 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer } from 'recharts';
+import React, { useState, useEffect, useRef } from "react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer } from "recharts";
+import { socket } from "../../sockets/socket";
+import { useNavigate } from "react-router-dom";
 
 const ECGRealtime = () => {
+  const navigate = useNavigate();
   const [ecgData, setEcgData] = useState({});
   const [isConnected, setIsConnected] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisComplete, setAnalysisComplete] = useState(false);
+  const [heartRate, setHeartRate] = useState(0);
+  const [analysisResult, setAnalysisResult] = useState(null);
+  const [savingStatus, setSavingStatus] = useState('');
+  const [debugInfo, setDebugInfo] = useState('');
+  
+  const dataBufferRef = useRef({});
+  const analysisTimerRef = useRef(null);
+  const heartRateCalcRef = useRef([]);
+  const rawDataBufferRef = useRef([]);
+  const lastPeakTimeRef = useRef(0);
+
   const [patientInfo] = useState({
     name: 'SUPTECH SANTE',
     gender: 'M',
-    age: 55
+    age: 55,
+    patientId: '507f1f77bcf86cd799439011'
   });
+
   const [settings] = useState({
     gains: 10,
     highOut: '150Hz',
@@ -16,17 +34,11 @@ const ECGRealtime = () => {
     hum: '60Hz',
     pace: 'ON'
   });
-  const [heartRate, setHeartRate] = useState(75);
-  const socketRef = useRef(null);
-  const dataBufferRef = useRef({});
   
-  // Buffer size for each lead (showing last 100 points)
   const BUFFER_SIZE = 100;
+  const ANALYSIS_DURATION = 30000;
+  const LEAD_NAMES = ['I','II','III','aVR','aVL','aVF','V1','V2','V3','V4','V5','V6'];
   
-  // Lead names in standard ECG order
-  const LEAD_NAMES = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6'];
-  
-  // Colors for each lead
   const LEAD_COLORS = {
     'I': '#e74c3c', 'II': '#3498db', 'III': '#2ecc71',
     'aVR': '#f39c12', 'aVL': '#9b59b6', 'aVF': '#1abc9c',
@@ -34,205 +46,288 @@ const ECGRealtime = () => {
     'V4': '#c0392b', 'V5': '#8e44ad', 'V6': '#16a085'
   };
 
-  // Initialize data buffers for all leads
+  // Initialize buffers
   useEffect(() => {
     const initialBuffer = {};
-    LEAD_NAMES.forEach(lead => {
-      initialBuffer[lead] = [];
-    });
+    LEAD_NAMES.forEach(lead => initialBuffer[lead] = []);
     dataBufferRef.current = initialBuffer;
     setEcgData(initialBuffer);
   }, []);
 
-  // Heart rate variability simulation
+  // Socket connection
   useEffect(() => {
-    let hrInterval;
-    
-    if (isConnected) {
-      hrInterval = setInterval(() => {
-        // Simulate natural heart rate variability (±5 bpm)
-        const variability = Math.floor(Math.random() * 11) - 5; // -5 to +5
-        setHeartRate(prev => {
-          const newRate = prev + variability;
-          // Keep within reasonable bounds (50-120 bpm)
-          return Math.min(Math.max(newRate, 50), 120);
-        });
-      }, 5000); // Change every 5 seconds
-    }
-    
-    return () => clearInterval(hrInterval);
-  }, [isConnected]);
-
-  // Socket connection and data handling
-  useEffect(() => {
-    // Simulate socket connection
-    const connectSocket = () => {
+    if (!socket.connected) {
+      console.log('Connecting socket...');
+      socket.connect();
+    } else {
       setIsConnected(true);
-      
-      // Simulate receiving ECG data
-      const interval = setInterval(() => {
-        const mockData = generateRealisticECGData();
-        handleECGUpdate(mockData);
-      }, 40); // 25Hz sampling rate for smoother display
-      
-      return () => clearInterval(interval);
+      console.log('Socket already connected');
+    }
+
+    const handleConnect = () => {
+      console.log('Socket connected:', socket.id);
+      setIsConnected(true);
     };
     
-    const cleanup = connectSocket();
-    
-    return cleanup;
-  }, [heartRate]);
+    const handleDisconnect = () => {
+      console.log('Socket disconnected');
+      setIsConnected(false);
+    };
 
-  // Generate realistic ECG data with proper waveforms for each lead
-  const generateRealisticECGData = () => {
-    const timestamp = Date.now();
-    const leads = {};
-    
-    // Base time in seconds for waveform generation
-    const time = timestamp / 1000;
-    
-    // Calculate current heart rate in Hz
-    const baseFreq = heartRate / 60;
-    
-    // Generate a consistent phase for all leads
-    const phase = time * baseFreq * 2 * Math.PI;
-    
-    LEAD_NAMES.forEach(lead => {
-      // Generate realistic ECG waveform with P, QRS, and T components
-      // Each lead has slightly different characteristics
-      const noise = (Math.random() - 0.5) * 0.05;
-      let pWave, qrsComplex, tWave, value;
+    socket.on("connect", handleConnect);
+    socket.on("disconnect", handleDisconnect);
+
+    return () => {
+      socket.off("connect", handleConnect);
+      socket.off("disconnect", handleDisconnect);
+    };
+  }, []);
+
+  // Socket event handlers
+  useEffect(() => {
+    const handleEcgUpdate = (data) => {
+      // Debug logging
+      console.log('Received data:', data);
       
-      // Different leads have different typical waveforms
-      switch(lead) {
-        case 'I':
-          pWave = 0.1 * Math.sin(phase - Math.PI/2) * Math.exp(-Math.pow(4*((phase/(2*Math.PI)) % 1 - 0.15), 2));
-          qrsComplex = 0.5 * Math.sin(phase) * Math.exp(-Math.pow(10*((phase/(2*Math.PI)) % 1 - 0.35), 2));
-          tWave = 0.2 * Math.sin(phase + Math.PI/2) * Math.exp(-Math.pow(6*((phase/(2*Math.PI)) % 1 - 0.6), 2));
-          value = pWave + qrsComplex + tWave + noise;
-          break;
-          
-        case 'II':
-          pWave = 0.15 * Math.sin(phase - Math.PI/2) * Math.exp(-Math.pow(4*((phase/(2*Math.PI)) % 1 - 0.15), 2));
-          qrsComplex = 0.8 * Math.sin(phase) * Math.exp(-Math.pow(10*((phase/(2*Math.PI)) % 1 - 0.35), 2));
-          tWave = 0.3 * Math.sin(phase + Math.PI/2) * Math.exp(-Math.pow(6*((phase/(2*Math.PI)) % 1 - 0.6), 2));
-          value = pWave + qrsComplex + tWave + noise;
-          break;
-          
-        case 'III':
-          pWave = 0.1 * Math.sin(phase - Math.PI/2) * Math.exp(-Math.pow(4*((phase/(2*Math.PI)) % 1 - 0.15), 2));
-          qrsComplex = 0.6 * Math.sin(phase) * Math.exp(-Math.pow(10*((phase/(2*Math.PI)) % 1 - 0.35), 2));
-          tWave = 0.25 * Math.sin(phase + Math.PI/2) * Math.exp(-Math.pow(6*((phase/(2*Math.PI)) % 1 - 0.6), 2));
-          value = pWave + qrsComplex + tWave + noise;
-          break;
-          
-        case 'aVR':
-          pWave = -0.08 * Math.sin(phase - Math.PI/2) * Math.exp(-Math.pow(4*((phase/(2*Math.PI)) % 1 - 0.15), 2));
-          qrsComplex = -0.4 * Math.sin(phase) * Math.exp(-Math.pow(10*((phase/(2*Math.PI)) % 1 - 0.35), 2));
-          tWave = -0.15 * Math.sin(phase + Math.PI/2) * Math.exp(-Math.pow(6*((phase/(2*Math.PI)) % 1 - 0.6), 2));
-          value = pWave + qrsComplex + tWave + noise;
-          break;
-          
-        case 'aVL':
-          pWave = 0.05 * Math.sin(phase - Math.PI/2) * Math.exp(-Math.pow(4*((phase/(2*Math.PI)) % 1 - 0.15), 2));
-          qrsComplex = 0.3 * Math.sin(phase) * Math.exp(-Math.pow(10*((phase/(2*Math.PI)) % 1 - 0.35), 2));
-          tWave = 0.1 * Math.sin(phase + Math.PI/2) * Math.exp(-Math.pow(6*((phase/(2*Math.PI)) % 1 - 0.6), 2));
-          value = pWave + qrsComplex + tWave + noise;
-          break;
-          
-        case 'aVF':
-          pWave = 0.12 * Math.sin(phase - Math.PI/2) * Math.exp(-Math.pow(4*((phase/(2*Math.PI)) % 1 - 0.15), 2));
-          qrsComplex = 0.7 * Math.sin(phase) * Math.exp(-Math.pow(10*((phase/(2*Math.PI)) % 1 - 0.35), 2));
-          tWave = 0.25 * Math.sin(phase + Math.PI/2) * Math.exp(-Math.pow(6*((phase/(2*Math.PI)) % 1 - 0.6), 2));
-          value = pWave + qrsComplex + tWave + noise;
-          break;
-          
-        case 'V1':
-          pWave = 0.05 * Math.sin(phase - Math.PI/2) * Math.exp(-Math.pow(4*((phase/(2*Math.PI)) % 1 - 0.15), 2));
-          qrsComplex = 0.2 * Math.sin(phase + Math.PI) * Math.exp(-Math.pow(12*((phase/(2*Math.PI)) % 1 - 0.35), 2));
-          tWave = 0.3 * Math.sin(phase + Math.PI/2) * Math.exp(-Math.pow(6*((phase/(2*Math.PI)) % 1 - 0.6), 2));
-          value = pWave + qrsComplex + tWave + noise;
-          break;
-          
-        case 'V2':
-          pWave = 0.06 * Math.sin(phase - Math.PI/2) * Math.exp(-Math.pow(4*((phase/(2*Math.PI)) % 1 - 0.15), 2));
-          qrsComplex = 0.4 * Math.sin(phase + Math.PI) * Math.exp(-Math.pow(12*((phase/(2*Math.PI)) % 1 - 0.35), 2));
-          tWave = 0.4 * Math.sin(phase + Math.PI/2) * Math.exp(-Math.pow(6*((phase/(2*Math.PI)) % 1 - 0.6), 2));
-          value = pWave + qrsComplex + tWave + noise;
-          break;
-          
-        case 'V3':
-          pWave = 0.07 * Math.sin(phase - Math.PI/2) * Math.exp(-Math.pow(4*((phase/(2*Math.PI)) % 1 - 0.15), 2));
-          qrsComplex = 0.6 * Math.sin(phase) * Math.exp(-Math.pow(10*((phase/(2*Math.PI)) % 1 - 0.35), 2));
-          tWave = 0.35 * Math.sin(phase + Math.PI/2) * Math.exp(-Math.pow(6*((phase/(2*Math.PI)) % 1 - 0.6), 2));
-          value = pWave + qrsComplex + tWave + noise;
-          break;
-          
-        case 'V4':
-          pWave = 0.08 * Math.sin(phase - Math.PI/2) * Math.exp(-Math.pow(4*((phase/(2*Math.PI)) % 1 - 0.15), 2));
-          qrsComplex = 0.7 * Math.sin(phase) * Math.exp(-Math.pow(10*((phase/(2*Math.PI)) % 1 - 0.35), 2));
-          tWave = 0.3 * Math.sin(phase + Math.PI/2) * Math.exp(-Math.pow(6*((phase/(2*Math.PI)) % 1 - 0.6), 2));
-          value = pWave + qrsComplex + tWave + noise;
-          break;
-          
-        case 'V5':
-          pWave = 0.09 * Math.sin(phase - Math.PI/2) * Math.exp(-Math.pow(4*((phase/(2*Math.PI)) % 1 - 0.15), 2));
-          qrsComplex = 0.75 * Math.sin(phase) * Math.exp(-Math.pow(10*((phase/(2*Math.PI)) % 1 - 0.35), 2));
-          tWave = 0.25 * Math.sin(phase + Math.PI/2) * Math.exp(-Math.pow(6*((phase/(2*Math.PI)) % 1 - 0.6), 2));
-          value = pWave + qrsComplex + tWave + noise;
-          break;
-          
-        case 'V6':
-          pWave = 0.1 * Math.sin(phase - Math.PI/2) * Math.exp(-Math.pow(4*((phase/(2*Math.PI)) % 1 - 0.15), 2));
-          qrsComplex = 0.8 * Math.sin(phase) * Math.exp(-Math.pow(10*((phase/(2*Math.PI)) % 1 - 0.35), 2));
-          tWave = 0.2 * Math.sin(phase + Math.PI/2) * Math.exp(-Math.pow(6*((phase/(2*Math.PI)) % 1 - 0.6), 2));
-          value = pWave + qrsComplex + tWave + noise;
-          break;
-          
-        default:
-          pWave = 0.1 * Math.sin(phase - Math.PI/2) * Math.exp(-Math.pow(4*((phase/(2*Math.PI)) % 1 - 0.15), 2));
-          qrsComplex = 0.5 * Math.sin(phase) * Math.exp(-Math.pow(10*((phase/(2*Math.PI)) % 1 - 0.35), 2));
-          tWave = 0.2 * Math.sin(phase + Math.PI/2) * Math.exp(-Math.pow(6*((phase/(2*Math.PI)) % 1 - 0.6), 2));
-          value = pWave + qrsComplex + tWave + noise;
+      // Check if it's a summary message
+      if (data.type === 'summary') {
+        console.log('📊 SUMMARY RECEIVED:', data.data);
+        setDebugInfo('Summary received!');
+        handleAnalysisSummary(data.data);
+        return;
       }
       
-      leads[lead] = parseFloat(value.toFixed(3));
-    });
-    
-    return { timestamp, leads };
+      // Regular live data
+      if (isAnalyzing) {
+        updateECGData(data);
+        calculateHeartRate(data);
+        rawDataBufferRef.current.push(data);
+        
+        // Update debug info
+        if (rawDataBufferRef.current.length % 20 === 0) {
+          setDebugInfo(`Collected ${rawDataBufferRef.current.length} data points`);
+        }
+      }
+    };
+
+    socket.on("ecgUpdate", handleEcgUpdate);
+
+    return () => {
+      socket.off("ecgUpdate", handleEcgUpdate);
+      if (analysisTimerRef.current) {
+        clearTimeout(analysisTimerRef.current);
+      }
+    };
+  }, [isAnalyzing]);
+
+  // Handle analysis summary
+  const handleAnalysisSummary = (summaryData) => {
+    console.log('Processing summary:', summaryData);
+    setAnalysisResult(summaryData);
+    stopAnalysis();
+    saveECGToDatabase(summaryData);
   };
 
-  // Handle incoming ECG data
-  const handleECGUpdate = (data) => {
-    const newBuffers = { ...dataBufferRef.current };
+  // Save ECG to database with detailed error handling
+  const saveECGToDatabase = async (summaryData) => {
+    console.log('💾 Attempting to save ECG...');
+    setSavingStatus('saving');
+    setDebugInfo('Saving to database...');
     
+    try {
+      console.log('Sending data:', {
+        signal: summaryData,
+        patientId: patientInfo.patientId
+      });
+
+      const response = await fetch('http://localhost:5001/api/ecg', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          signal: summaryData,
+          patientId: patientInfo.patientId
+        })
+      });
+
+      console.log('Response status:', response.status);
+      const result = await response.json();
+      console.log('Response data:', result);
+      
+      if (result.success) {
+        setSavingStatus('saved');
+        setDebugInfo('✓ Saved successfully');
+        console.log('✅ ECG saved successfully');
+        setTimeout(() => setSavingStatus(''), 5000);
+      } else {
+        throw new Error(result.error || 'Failed to save ECG');
+      }
+    } catch (error) {
+      console.error('❌ Error saving ECG:', error);
+      setSavingStatus('error');
+      setDebugInfo(`Error: ${error.message}`);
+      setTimeout(() => setSavingStatus(''), 5000);
+    }
+  };
+
+  // Improved heart rate calculation
+  const calculateHeartRate = (data) => {
+    if (!data.leads || !data.leads['II']) return;
+    
+    const leadIIValue = data.leads['II'];
+    const now = Date.now();
+    
+    // Detect peaks with threshold and debounce
+    if (Math.abs(leadIIValue) > 0.2) {
+      // Debounce peaks (minimum 300ms between peaks = max 200 bpm)
+      if (now - lastPeakTimeRef.current > 300) {
+        heartRateCalcRef.current.push(now);
+        lastPeakTimeRef.current = now;
+        
+        // Keep last 5 peaks for averaging
+        if (heartRateCalcRef.current.length > 5) {
+          heartRateCalcRef.current.shift();
+        }
+        
+        // Calculate HR from last few intervals
+        if (heartRateCalcRef.current.length >= 2) {
+          const intervals = [];
+          for (let i = 1; i < heartRateCalcRef.current.length; i++) {
+            intervals.push(heartRateCalcRef.current[i] - heartRateCalcRef.current[i-1]);
+          }
+          const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+          const bpm = Math.round(60000 / avgInterval);
+          
+          // Only update if reasonable (40-180 bpm)
+          if (bpm >= 40 && bpm <= 180) {
+            setHeartRate(bpm);
+            console.log('HR updated:', bpm);
+          }
+        }
+      }
+    }
+  };
+
+  // Update ECG data for charts
+  const updateECGData = (data) => {
+    if (!data.leads) return;
+    
+    const newBuffers = { ...dataBufferRef.current };
+
     LEAD_NAMES.forEach(lead => {
       const leadValue = data.leads[lead];
+      if (leadValue === undefined) return;
+      
       const newPoint = {
         timestamp: data.timestamp,
-        time: new Date(data.timestamp).toLocaleTimeString(),
         value: leadValue,
-        // Create a simple index for x-axis to avoid time formatting issues
         index: (newBuffers[lead]?.length || 0) % BUFFER_SIZE
       };
-      
-      // Add new point and maintain buffer size
+
       const currentData = newBuffers[lead] || [];
       const newData = [...currentData, newPoint];
-      if (newData.length > BUFFER_SIZE) {
-        newData.shift();
-      }
-      
+      if (newData.length > BUFFER_SIZE) newData.shift();
+
       newBuffers[lead] = newData;
     });
-    
+
     dataBufferRef.current = newBuffers;
     setEcgData(newBuffers);
   };
 
+  // Start analysis
+  const startAnalysis = () => {
+    if (!isConnected) {
+      alert("Not connected to server. Please check your connection.");
+      return;
+    }
+
+    console.log('🎬 Starting analysis...');
+    
+    // Clear previous data
+    const clearBuffer = {};
+    LEAD_NAMES.forEach(lead => {
+      clearBuffer[lead] = [];
+    });
+    dataBufferRef.current = clearBuffer;
+    setEcgData(clearBuffer);
+    
+    // Reset all states
+    heartRateCalcRef.current = [];
+    rawDataBufferRef.current = [];
+    lastPeakTimeRef.current = 0;
+    setHeartRate(0);
+    setAnalysisResult(null);
+    setSavingStatus('');
+    setDebugInfo('Analysis started...');
+    
+    setIsAnalyzing(true);
+    setAnalysisComplete(false);
+
+    // Backup timeout
+    analysisTimerRef.current = setTimeout(() => {
+      console.log('⏰ Timeout reached');
+      if (isAnalyzing) {
+        setDebugInfo('Timeout - calculating local summary');
+        calculateLocalSummary();
+      }
+    }, ANALYSIS_DURATION + 2000);
+  };
+
+  // Calculate summary locally (backup)
+  const calculateLocalSummary = () => {
+    console.log('📊 Calculating local summary, data points:', rawDataBufferRef.current.length);
+    
+    if (rawDataBufferRef.current.length === 0) {
+      alert('No data collected during analysis. Check if backend is sending data.');
+      setDebugInfo('No data collected!');
+      stopAnalysis();
+      return;
+    }
+
+    const summary = { timestamp: Date.now(), leads: {} };
+
+    LEAD_NAMES.forEach(lead => {
+      const values = rawDataBufferRef.current
+        .map(d => d.leads[lead])
+        .filter(v => v !== undefined);
+        
+      if (values.length > 0) {
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+        summary.leads[lead] = { 
+          min: +min.toFixed(3), 
+          max: +max.toFixed(3), 
+          avg: +avg.toFixed(3) 
+        };
+      }
+    });
+
+    console.log('Local summary:', summary);
+    setAnalysisResult(summary);
+    setDebugInfo('Local summary calculated');
+    stopAnalysis();
+    saveECGToDatabase(summary);
+  };
+
+  // Stop analysis
+  const stopAnalysis = () => {
+    console.log('⏹️ Stopping analysis');
+    setIsAnalyzing(false);
+    setAnalysisComplete(true);
+    
+    if (analysisTimerRef.current) {
+      clearTimeout(analysisTimerRef.current);
+      analysisTimerRef.current = null;
+    }
+  };
+
   return (
     <div className="w-screen h-screen bg-gray-900 p-4 flex flex-col">
-      {/* Header with patient info */}
+      {/* Header */}
       <div className="flex justify-between items-center mb-2">
         <div className="text-white text-lg font-mono">
           {patientInfo.name} {patientInfo.gender} {patientInfo.age}
@@ -243,7 +338,7 @@ const ECGRealtime = () => {
       </div>
       
       {/* Settings row */}
-      <div className="flex justify-between items-center mb-4">
+      <div className="flex justify-between items-center mb-2">
         <div className="text-gray-400 text-sm font-mono">
           HighOut: {settings.highOut} LowOut: {settings.lowOut} Hum: {settings.hum} Pace: {settings.pace}
         </div>
@@ -252,20 +347,32 @@ const ECGRealtime = () => {
         }`}>
           <div className={`w-2 h-2 rounded-full ${
             isConnected ? 'bg-green-400' : 'bg-red-400'
-          }`}></div>
+          } ${isConnected ? 'animate-pulse' : ''}`}></div>
           {isConnected ? 'Connected' : 'Disconnected'}
         </div>
       </div>
+
+      {/* Debug info */}
+      {debugInfo && (
+        <div className="mb-2 text-xs font-mono text-yellow-400 bg-gray-800 px-2 py-1 rounded">
+          Debug: {debugInfo}
+        </div>
+      )}
       
-      {/* Main content area */}
+      {/* Main content */}
       <div className="flex flex-1 gap-4">
         {/* ECG Charts Grid */}
         <div className="flex-1 grid grid-cols-3 gap-4">
           {LEAD_NAMES.map((lead) => (
             <div key={lead} className="bg-black rounded-lg p-2 border border-gray-700 relative">
-              <div className="absolute top-2 left-4 z-10 text-sm font-mono" style={{ color: LEAD_COLORS[lead] }}>
+              <div className="absolute top-2 left-4 z-10 text-sm font-mono font-bold" style={{ color: LEAD_COLORS[lead] }}>
                 {lead}
               </div>
+              {analysisResult && analysisResult.leads[lead] && (
+                <div className="absolute top-2 right-4 z-10 text-xs font-mono text-green-400">
+                  {analysisResult.leads[lead].avg.toFixed(3)}
+                </div>
+              )}
               <ResponsiveContainer width="100%" height={150}>
                 <LineChart
                   data={ecgData[lead] || []}
@@ -304,17 +411,55 @@ const ECGRealtime = () => {
         {/* Side panel */}
         <div className="w-48 bg-gray-800 rounded-lg p-4 flex flex-col items-center justify-center">
           <div className="text-white font-mono text-center mb-2">HR</div>
-          <div className="text-red-500 font-mono text-4xl">{heartRate}</div>
+          <div className={`font-mono text-4xl font-bold ${heartRate > 0 ? 'text-red-500' : 'text-gray-600'}`}>
+            {heartRate > 0 ? heartRate : '--'}
+          </div>
           <div className="text-white font-mono text-center mt-2">bpm</div>
           
+          {isAnalyzing && (
+            <div className="mt-4 text-center">
+              <div className="text-yellow-400 text-sm font-mono animate-pulse">● Recording...</div>
+              <div className="text-gray-400 text-xs font-mono mt-1">30 seconds</div>
+            </div>
+          )}
+          
+          {analysisComplete && (
+            <div className="mt-4 text-center">
+              <div className="text-green-400 text-sm font-mono">✓ Complete</div>
+              {savingStatus === 'saving' && (
+                <div className="text-blue-400 text-xs font-mono mt-1 animate-pulse">Saving...</div>
+              )}
+              {savingStatus === 'saved' && (
+                <div className="text-green-400 text-xs font-mono mt-1">Saved ✓</div>
+              )}
+              {savingStatus === 'error' && (
+                <div className="text-red-400 text-xs font-mono mt-1">Failed ✗</div>
+              )}
+            </div>
+          )}
+          
           <div className="mt-8 flex flex-col gap-2 w-full">
-            <button className="bg-blue-600 text-white font-mono py-2 rounded hover:bg-blue-700">
-              ANALYZE
+            <button 
+              className={`font-mono py-2 rounded transition-colors ${
+                isAnalyzing || !isConnected
+                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed' 
+                  : 'bg-blue-600 text-white hover:bg-blue-700'
+              }`}
+              onClick={startAnalysis}
+              disabled={isAnalyzing || !isConnected}
+            >
+              {isAnalyzing ? 'ANALYZING...' : 'ANALYZE'}
             </button>
-            <button className="bg-gray-700 text-white font-mono py-2 rounded hover:bg-gray-600">
+            <button 
+              onClick={() => navigate('/patient')} 
+              className="bg-gray-700 text-white font-mono py-2 rounded hover:bg-gray-600"
+            >
               MENU
             </button>
-            <button className="bg-gray-700 text-white font-mono py-2 rounded hover:bg-gray-600">
+            <button 
+              onClick={() => navigate('/patient')} 
+              className="bg-gray-700 text-white font-mono py-2 rounded hover:bg-gray-600"
+            >
               EXIT
             </button>
           </div>
