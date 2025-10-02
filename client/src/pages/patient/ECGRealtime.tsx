@@ -120,13 +120,37 @@ const ECGRealtime = () => {
     };
   }, [isAnalyzing]);
 
-  // Handle analysis summary
+  
   const handleAnalysisSummary = (summaryData) => {
-    console.log('Processing summary:', summaryData);
-    setAnalysisResult(summaryData);
-    stopAnalysis();
-    saveECGToDatabase(summaryData);
-  };
+  console.log('Processing summary:', summaryData);
+  console.log('Current heart rate:', heartRate);
+  console.log('Peak count:', heartRateCalcRef.current.length);
+
+  // Calculate HR one more time from collected peaks
+  let finalBPM = heartRate;
+  
+  if (heartRateCalcRef.current.length >= 2) {
+    const intervals = [];
+    for (let i = 1; i < heartRateCalcRef.current.length; i++) {
+      intervals.push(heartRateCalcRef.current[i] - heartRateCalcRef.current[i - 1]);
+    }
+    const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+    const calculatedBPM = Math.round(60000 / avgInterval);
+    
+    if (calculatedBPM >= 40 && calculatedBPM <= 180) {
+      finalBPM = calculatedBPM;
+      console.log('✓ Final calculated BPM:', finalBPM);
+    }
+  } else {
+    console.warn('⚠️ Not enough peaks detected for HR calculation');
+  }
+
+  const finalSummary = { ...summaryData, bpm: finalBPM };
+
+  setAnalysisResult(finalSummary);
+  stopAnalysis();
+  saveECGToDatabase(finalSummary);
+};
 
   // Save ECG to database with detailed error handling
   const saveECGToDatabase = async (summaryData) => {
@@ -147,7 +171,8 @@ const ECGRealtime = () => {
         },
         body: JSON.stringify({
           signal: summaryData,
-          patientId: patientInfo.patientId
+          patientId: patientInfo.patientId,
+          bpm: summaryData.bpm || heartRate   // store bpm too
         })
       });
 
@@ -171,43 +196,41 @@ const ECGRealtime = () => {
     }
   };
 
-  // Improved heart rate calculation
-  const calculateHeartRate = (data) => {
-    if (!data.leads || !data.leads['II']) return;
-    
-    const leadIIValue = data.leads['II'];
-    const now = Date.now();
-    
-    // Detect peaks with threshold and debounce
-    if (Math.abs(leadIIValue) > 0.2) {
-      // Debounce peaks (minimum 300ms between peaks = max 200 bpm)
-      if (now - lastPeakTimeRef.current > 300) {
-        heartRateCalcRef.current.push(now);
-        lastPeakTimeRef.current = now;
-        
-        // Keep last 5 peaks for averaging
-        if (heartRateCalcRef.current.length > 5) {
-          heartRateCalcRef.current.shift();
+ // Improved HR calculation
+const calculateHeartRate = (data) => {
+  if (!data.leads || data.leads['II'] === undefined) return;
+
+  const leadIIValue = data.leads['II'];
+  const now = Date.now();
+
+  // Lower threshold to match your signal
+  const threshold = 0.05;
+
+  if (leadIIValue > threshold) {
+    if (now - lastPeakTimeRef.current > 300) {
+      heartRateCalcRef.current.push(now);
+      lastPeakTimeRef.current = now;
+
+      if (heartRateCalcRef.current.length > 8) {
+        heartRateCalcRef.current.shift();
+      }
+
+      if (heartRateCalcRef.current.length >= 2) {
+        const intervals = [];
+        for (let i = 1; i < heartRateCalcRef.current.length; i++) {
+          intervals.push(heartRateCalcRef.current[i] - heartRateCalcRef.current[i - 1]);
         }
-        
-        // Calculate HR from last few intervals
-        if (heartRateCalcRef.current.length >= 2) {
-          const intervals = [];
-          for (let i = 1; i < heartRateCalcRef.current.length; i++) {
-            intervals.push(heartRateCalcRef.current[i] - heartRateCalcRef.current[i-1]);
-          }
-          const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-          const bpm = Math.round(60000 / avgInterval);
-          
-          // Only update if reasonable (40-180 bpm)
-          if (bpm >= 40 && bpm <= 180) {
-            setHeartRate(bpm);
-            console.log('HR updated:', bpm);
-          }
+        const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+        const bpm = Math.round(60000 / avgInterval);
+
+        if (bpm >= 40 && bpm <= 180) {
+          setHeartRate(bpm);
         }
       }
     }
-  };
+  }
+};
+
 
   // Update ECG data for charts
   const updateECGData = (data) => {
@@ -277,41 +300,42 @@ const ECGRealtime = () => {
 
   // Calculate summary locally (backup)
   const calculateLocalSummary = () => {
-    console.log('📊 Calculating local summary, data points:', rawDataBufferRef.current.length);
-    
-    if (rawDataBufferRef.current.length === 0) {
-      alert('No data collected during analysis. Check if backend is sending data.');
-      setDebugInfo('No data collected!');
-      stopAnalysis();
-      return;
-    }
+  console.log('📊 Calculating local summary, data points:', rawDataBufferRef.current.length);
 
-    const summary = { timestamp: Date.now(), leads: {} };
-
-    LEAD_NAMES.forEach(lead => {
-      const values = rawDataBufferRef.current
-        .map(d => d.leads[lead])
-        .filter(v => v !== undefined);
-        
-      if (values.length > 0) {
-        const min = Math.min(...values);
-        const max = Math.max(...values);
-        const avg = values.reduce((a, b) => a + b, 0) / values.length;
-
-        summary.leads[lead] = { 
-          min: +min.toFixed(3), 
-          max: +max.toFixed(3), 
-          avg: +avg.toFixed(3) 
-        };
-      }
-    });
-
-    console.log('Local summary:', summary);
-    setAnalysisResult(summary);
-    setDebugInfo('Local summary calculated');
+  if (rawDataBufferRef.current.length === 0) {
+    alert('No data collected during analysis. Check if backend is sending data.');
+    setDebugInfo('No data collected!');
     stopAnalysis();
-    saveECGToDatabase(summary);
-  };
+    return;
+  }
+
+  const summary = { timestamp: Date.now(), leads: {} };
+
+  LEAD_NAMES.forEach(lead => {
+    const values = rawDataBufferRef.current.map(d => d.leads[lead]).filter(v => v !== undefined);
+
+    if (values.length > 0) {
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+      summary.leads[lead] = {
+        min: +min.toFixed(3),
+        max: +max.toFixed(3),
+        avg: +avg.toFixed(3)
+      };
+    }
+  });
+
+  // Add HR to local summary
+  const finalSummary = { ...summary, bpm: heartRate };
+
+  console.log('Local summary:', finalSummary);
+  setAnalysisResult(finalSummary);
+  setDebugInfo('Local summary calculated');
+  stopAnalysis();
+  saveECGToDatabase(finalSummary);
+};
 
   // Stop analysis
   const stopAnalysis = () => {

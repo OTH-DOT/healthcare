@@ -10,6 +10,7 @@ import AdminLayout from "./layouts/AdminLayout";
 // Example pages
 import ECGRealtime from "./pages/patient/ECGRealtime";
 import { Button } from "./components/ui/button";
+import Planning from "./pages/patient/Planning";
 // import PatientDashboard from "./pages/patient/PatientDashboard";
 // import DoctorDashboard from "./pages/doctor/DoctorDashboard";
 // import AdminDashboard from "./pages/admin/AdminDashboard";
@@ -32,11 +33,12 @@ function App() {
           <Route
             path="/patient"
             element={
-              <div className="flex min-h-screen flex-col items-center justify-center">
+              <div className="flex min-h-full flex-col items-center justify-center">
                 <h1 className="text-2xl mb-4">Patient</h1>
               </div>
             }
           />
+          <Route path="/patient/planning" element={<Planning />} />
         </Route>
         <Route path="/patient/ecg" element={<ECGRealtime />} />
 

@@ -1,7 +1,8 @@
 import { 
   ShoppingBag, 
   EarthIcon,
-  Activity
+  Activity,
+  AlertCircle
 } from "lucide-react";
 import {
   Sidebar,
@@ -150,9 +151,9 @@ const DashboardSidebar = ({ brand, menu }: DashboardSidebarProps) => {
           onClick={() => navigate("/")}
         >
           <div className="flex items-center justify-center w-8 h-8 bg-white/20 rounded-lg mr-3">
-            <EarthIcon className="w-5 h-5" />
+            <AlertCircle className="w-5 h-5" />
           </div>
-          <span>Visit Store</span>
+          <span>Alert</span>
         </Button>
         
         <div className="rounded-xl border border-lime-100 bg-white shadow-sm hover:shadow-md transition-all duration-300 hover:border-lime-200">

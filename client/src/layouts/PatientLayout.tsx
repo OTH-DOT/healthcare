@@ -40,7 +40,7 @@ const patientMenu = [
 function PatientLayout() {
   return (
     <SidebarProvider>
-      <div className="flex min-h-screen w-full overflow-hidden">
+      <div className="flex min-h-screen w-screen overflow-hidden bg-gradient-to-br from-slate-50 to-slate-100 ">
         {/* Sidebar */}
         <DashboardSidebar 
           brand={{ name: "Health", highlight: "Care", panel: "Suptech" }}
@@ -48,20 +48,20 @@ function PatientLayout() {
         />
         
         {/* Main Content Area */}
-        <div className="flex flex-col flex-1 w-full min-w-0">
-          {/* Navbar - positioned to account for sidebar */}
+        <div className="flex flex-col flex-1 min-w-0 overflow-x-hidden">
+          {/* Navbar */}
           <DashboardNavbar 
-            userRole="patient" 
-            notificationCount={4} 
+            userRole="patient"
+            notificationCount={4}
           />
           
           {/* Main content with proper spacing */}
-          <main className="flex-1 p-4 pt-[74px] w-full overflow-auto">
+          <main className="flex-1 w-full p-4 pt-[74px] m-0 overflow-y-auto overflow-x-hidden">
             <Outlet />
           </main>
         </div>
       </div>
-    </SidebarProvider>  
+    </SidebarProvider>
   );
 }
 
