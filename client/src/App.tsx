@@ -11,6 +11,8 @@ import AdminLayout from "./layouts/AdminLayout";
 import ECGRealtime from "./pages/patient/ECGRealtime";
 import { Button } from "./components/ui/button";
 import Planning from "./pages/patient/Planning";
+import HealthcareLogin from "./pages/auth/Login";
+import HealthcareRegister from "./pages/auth/Register";
 // import PatientDashboard from "./pages/patient/PatientDashboard";
 // import DoctorDashboard from "./pages/doctor/DoctorDashboard";
 // import AdminDashboard from "./pages/admin/AdminDashboard";
@@ -51,6 +53,9 @@ function App() {
         <Route element={<AdminLayout />}>
           {/* <Route path="/admin/dashboard" element={<AdminDashboard />} /> */}
         </Route>
+
+        <Route path="/login" element={<HealthcareLogin />} />
+        <Route path="/register" element={<HealthcareRegister />} />
 
         {/* Fallback */}
         <Route path="*" element={<NotFound />} />
